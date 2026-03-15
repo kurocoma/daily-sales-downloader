@@ -1,0 +1,28 @@
+# Credentials - NEVER commit
+docs/ID・PW.xlsx
+.env
+.env.local
+secrets/
+
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Playwright
+test-results/
+playwright-report/
+
+# App runtime
+logs/
+data/
+.pytest_cache/

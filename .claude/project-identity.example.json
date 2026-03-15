@@ -1,0 +1,7 @@
+{
+  "projectName": "replace-me",
+  "expectedGhUser": "replace-me",
+  "expectedGitEmail": "replace-me@example.com",
+  "expectedRemotePattern": "github.com[:/]your-org/your-repo(\\.git)?$",
+  "baseBranch": "main"
+}

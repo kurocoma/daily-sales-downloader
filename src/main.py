@@ -1,0 +1,171 @@
+"""CLI エントリポイント — 日別売上集計データ自動ダウンロード."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+from playwright.async_api import async_playwright
+
+# .env を読み込み（プロジェクトルートから）
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+from src.config import AppConfig, parse_args
+from src.credential import load_credentials
+from src.downloader.base import DownloadResult
+from src.utils.logger import setup_logger
+
+logger = logging.getLogger("daily_sales")
+
+# サイト名 → Downloader クラスのマッピング（フェーズ2で各クラスを追加）
+_DOWNLOADER_MAP: dict[str, type] = {}
+
+
+def _register_downloaders() -> None:
+    """利用可能な Downloader クラスを登録する."""
+    from src.downloader.rakuten import RakutenDownloader
+    from src.downloader.yahoo import YahooDownloader
+    from src.downloader.amazon import AmazonDownloader
+    from src.downloader.next_engine import NextEngineDownloader
+
+    _DOWNLOADER_MAP["rakuten"] = RakutenDownloader
+    _DOWNLOADER_MAP["yahoo"] = YahooDownloader
+    _DOWNLOADER_MAP["amazon"] = AmazonDownloader
+    _DOWNLOADER_MAP["next_engine"] = NextEngineDownloader
+
+
+async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
+    """全サイト × 全日付のダウンロードを実行する.
+
+    処理順: サイトループ(外側) → 日付ループ(内側)
+    → ログインは各サイト1回のみ、同一セッションで日付を切り替えて DL
+    """
+    credentials = load_credentials(config.credential_path)
+    logger.info("認証情報を読み込みました: %s", list(credentials.keys()))
+    logger.info(
+        "対象日: %s / 対象サイト: %s",
+        ", ".join(d.isoformat() for d in config.target_dates),
+        config.target_sites,
+    )
+
+    # {date_iso: {site: DownloadResult}}
+    all_results: dict[str, dict[str, DownloadResult]] = {
+        d.isoformat(): {} for d in config.target_dates
+    }
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=config.headless)
+
+        for site in config.target_sites:
+            logger.info("=" * 50)
+            logger.info("%s: 処理開始（%d日分）", site, len(config.target_dates))
+            logger.info("=" * 50)
+
+            downloader_cls = _DOWNLOADER_MAP.get(site)
+            if downloader_cls is None:
+                logger.warning("%s: Downloader 未実装（スキップ）", site)
+                for d in config.target_dates:
+                    all_results[d.isoformat()][site] = DownloadResult(
+                        site=site, success=False, error="未実装",
+                    )
+                continue
+
+            # コンテキスト作成
+            if site == "amazon":
+                user_data_dir = config.cookie_dir / "amazon_profile"
+                user_data_dir.mkdir(parents=True, exist_ok=True)
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data_dir),
+                    headless=config.headless,
+                    accept_downloads=True,
+                    locale="ja-JP",
+                )
+            else:
+                cookie_file = config.cookie_dir / f"{site}.json"
+                storage_state = str(cookie_file) if cookie_file.exists() else None
+                context = await browser.new_context(
+                    storage_state=storage_state,
+                    accept_downloads=True,
+                    locale="ja-JP",
+                )
+
+            # ログイン1回 → 全日付 DL
+            downloader = downloader_cls(config, credentials, context)
+            site_results = await downloader.run_multi_dates(config.target_dates)
+
+            # 結果を date → site 構造にマッピング
+            for date_key, result in site_results.items():
+                all_results[date_key][site] = result
+
+            # Cookie 保存（1件でも成功していれば）
+            any_ok = any(r.success for r in site_results.values())
+            if any_ok and site != "amazon":
+                config.cookie_dir.mkdir(parents=True, exist_ok=True)
+                await context.storage_state(path=str(cookie_file))
+                logger.info("%s: Cookie 保存完了", site)
+
+            await context.close()
+
+        await browser.close()
+
+    return all_results
+
+
+def report(
+    all_results: dict[str, dict[str, DownloadResult]],
+    total_elapsed: float = 0,
+) -> None:
+    """実行結果をログに出力する."""
+    logger.info("=" * 50)
+    logger.info("実行結果サマリー (合計 %.1f秒)", total_elapsed)
+    logger.info("=" * 50)
+    ok_count = 0
+    ng_count = 0
+    for date_str, results in all_results.items():
+        logger.info("--- %s ---", date_str)
+        for site, result in results.items():
+            if result.success:
+                ok_count += 1
+                files_str = ", ".join(str(f) for f in result.files)
+                logger.info("  [OK] %s: %s", site, files_str or "ファイルなし")
+            else:
+                ng_count += 1
+                logger.error("  [NG] %s: %s", site, result.error)
+    logger.info("結果: %d 成功 / %d 失敗 / %d 合計", ok_count, ng_count, ok_count + ng_count)
+
+
+def cli(argv: list[str] | None = None) -> None:
+    """CLI エントリポイント."""
+    config = parse_args(argv)
+    setup_logger(config.log_dir, config.target_dates[0])
+    _register_downloaders()
+
+    logger.info("日別売上集計データダウンロード開始")
+    logger.info(
+        "対象日数: %d (%s)",
+        len(config.target_dates),
+        ", ".join(d.isoformat() for d in config.target_dates),
+    )
+    start_time = time.monotonic()
+    all_results = asyncio.run(async_main(config))
+    total_elapsed = time.monotonic() - start_time
+    report(all_results, total_elapsed)
+
+    failed: list[str] = []
+    for date_str, results in all_results.items():
+        for site, r in results.items():
+            if not r.success:
+                failed.append(f"{date_str}/{site}")
+    if failed:
+        logger.error("失敗: %s", ", ".join(failed))
+        sys.exit(1)
+
+    logger.info("全サイト・全日付 正常完了")
+
+
+if __name__ == "__main__":
+    cli()

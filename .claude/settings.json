@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "defaultMode": "bypassPermissions",
+  "enableAllProjectMcpServers": false,
+  "enabledMcpjsonServers": [
+    "playwright",
+    "browser-use",
+    "next-devtools"
+  ],
+  "permissions": {
+    "allow": [
+      "WebFetch",
+      "Bash",
+      "mcp__playwright__*",
+      "mcp__browser-use__*",
+      "mcp__next-devtools__*",
+      "Skill(verify)",
+      "Skill(playwright-python *)",
+      "Skill(nextjs-app-router *)",
+      "Skill(web-automation-stack *)",
+      "Skill(browser-regression *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "allowUnsandboxedCommands": true,
+    "filesystem": {
+      "allowWrite": [
+        "//tmp",
+        "~/.cache/ms-playwright",
+        "~/.npm",
+        "~/.cache/pip",
+        "~/.local/share/pnpm",
+        "~/.bun"
+      ],
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gcloud"
+      ]
+    },
+    "network": {
+      "allowLocalBinding": true,
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "*.githubusercontent.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "playwright.azureedge.net",
+        "playwright-verizon.azureedge.net",
+        "api.browser-use.com",
+        "nextjs.org",
+        "*.vercel.app",
+        "code.claude.com",
+        "*.anthropic.com"
+      ]
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pretool_project_guard.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/posttool_project_audit.py"
+          }
+        ]
+      }
+    ]
+  }
+}

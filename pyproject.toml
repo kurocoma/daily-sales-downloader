@@ -1,0 +1,19 @@
+[project]
+name = "daily-sales-downloader"
+version = "0.1.0"
+description = "日別売上集計データ自動ダウンロードツール"
+requires-python = ">=3.12"
+dependencies = [
+    "playwright>=1.40",
+    "openpyxl>=3.1",
+    "python-dotenv>=1.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+download = "src.main:cli"
