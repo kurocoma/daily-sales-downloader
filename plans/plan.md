@@ -40,9 +40,23 @@
 - [x] NE 購入者/商品情報 — 「結果はありませんでした」判定 → None返却
 - [x] デバッグ用スクリーンショット削除（amazon.py）
 
-## フェーズ 6: スケジューリング・本番運用 🔜 未着手
+## フェーズ 6: 自動化検出回避・セッション維持 ✅ 完了
 
-- [ ] Windows タスクスケジューラ設定（深夜自動実行）
+- [x] `playwright-stealth` 導入 — 全サイトのコンテキストに `Stealth().apply_stealth_async()` 適用
+- [x] Amazon `--disable-blink-features=AutomationControlled` 追加
+- [x] `src/session_refresh.py` — Amazon セッション定期リフレッシュスクリプト
+- [x] タスクスケジューラ `AmazonSessionRefresh` 登録（2時間ごと）
+
+## フェーズ 7: NE Cookie バナー対応 ✅ 完了
+
+- [x] `_dismiss_cookie_banner()` — Cookie 同意バナー（`#cm-ov` オーバーレイ）を閉じる処理
+- [x] 同意ボタンクリック or JS による要素除去のフォールバック
+
+## フェーズ 8: スケジューリング・本番運用 ✅ 完了
+
+- [x] タスクスケジューラ `DailySalesDownload` 登録（毎朝 6:00）
+- [x] 失敗時リトライ設定（1時間ごと、最大3回、9:00 までにカバー）
+- [x] タスクスケジューラからの実行テスト — 全4サイト成功確認
 - [ ] 1週間の本番試行 → 安定性確認
 
 ---
@@ -51,9 +65,10 @@
 
 ```
 src/
-├── main.py              # CLI エントリポイント・メインループ
+├── main.py              # CLI エントリポイント・メインループ（playwright-stealth 適用）
 ├── config.py            # AppConfig（CLI引数・設定管理）
 ├── credential.py        # xlsx からの認証情報読み取り
+├── session_refresh.py   # Amazon セッション定期リフレッシュ
 ├── utils/
 │   ├── path_resolver.py # 保存先パス生成
 │   └── logger.py        # ログ設定・自動クリーンアップ
@@ -62,7 +77,7 @@ src/
     ├── rakuten.py       # 楽天市場
     ├── yahoo.py         # Yahoo Shopping
     ├── amazon.py        # Amazon Seller Central
-    └── next_engine.py   # ネクストエンジン
+    └── next_engine.py   # ネクストエンジン（Cookie バナー対応）
 
 data/
 ├── cookies/             # Cookie / storage_state JSON
@@ -119,7 +134,7 @@ async def run_multi_dates(dates: list[date]) -> dict[str, DownloadResult]:
 | 楽天 | password 入力が見えたら ID スキップ | 「認証が必要です」最大3回リトライ、CSV作成→DLリンク待機→認証ダイアログ | 「データ件数は0件です」→ 空リスト |
 | Yahoo | `input[name="handle"]` 不可視 → 全スキップ | 詳細検索タブ → 出荷日設定 → 注文DL画面 → 注文/商品 2ファイル | 「該当する注文がありません」→ 空リスト |
 | Amazon | persistent_context で 2FA 記憶 | 全注文: kat-dropdown(value="7") + 処理中ポーリング。トランザクション: kat-date-picker + CustomEvent(isoValue) | トランザクション「結果が見つかりませんでした」→ スキップ |
-| NE | `#user_login_code` 不可視 → スキップ | 受注一覧 → 詳細検索 → DL → 全選択 → 明細一覧 → 伝票明細 → 別タブDL | 「結果はありませんでした」→ スキップ |
+| NE | `#user_login_code` 不可視 → スキップ。Cookie 同意バナー自動閉じ | 受注一覧 → 詳細検索 → DL → 全選択 → 明細一覧 → 伝票明細 → 別タブDL | 「結果はありませんでした」→ スキップ |
 
 ## CLI 使用例
 
@@ -165,9 +180,17 @@ uv run python -m src.main --date-from 2026-03-09 --date-to 2026-03-11 --site ama
 | NE | ✅ 2ファイル | ✅ 0件スキップ | ✅ 0件スキップ |
 | **合計** | | | **12成功 / 0失敗 / 331.4秒** |
 
+### タスクスケジューラからの実行テスト（2026-03-16 / 3/15分）
+
+| サイト | 結果 | 備考 |
+|--------|------|------|
+| 楽天 | ✅ | 0件スキップ |
+| Yahoo | ✅ | 0件スキップ |
+| Amazon | ✅ | AllOrderReport_20260315.txt 保存 |
+| NE | ✅ (修正後) | 初回: Cookie バナーでクリック妨害 → `_dismiss_cookie_banner()` 追加後に成功 |
+
 ## 未解決事項
 
 | # | 内容 | 優先度 |
 |---|------|--------|
-| 1 | Windows タスクスケジューラ設定 | 高 — フェーズ6 |
-| 2 | ヘッドレスモードでの長期安定性検証 | 中 — 本番試行で確認 |
+| 1 | 1週間の本番試行 → 安定性確認 | 中 — タスクスケジューラで自動運用中 |

@@ -246,20 +246,105 @@ NE:    ログイン(1回) → DL(3/9) → DL(3/10) → DL(3/11) → Cookie保存
 
 エラー時に `logs/screenshots/{site}_{timestamp}.png` へ自動保存。
 
-## 11. 非機能要件
+## 10. 自動化検出回避（playwright-stealth）
+
+### 概要
+
+Amazon 等のサイトではブラウザ自動化の検出が行われ、セッション切れや
+ブロックの原因となる。`playwright-stealth` を全サイトのコンテキストに適用し、
+`navigator.webdriver` プロパティ等の検出シグナルを除去する。
+
+### 適用箇所
+
+| 対象 | 適用方法 |
+|------|---------|
+| 全サイト共通 | `Stealth().apply_stealth_async(context)` をコンテキスト作成直後に実行 |
+| Amazon 追加対策 | `launch_persistent_context` に `args=["--disable-blink-features=AutomationControlled"]` を追加 |
+
+### 依存パッケージ
+
+- `playwright-stealth>=2.0.2`（pyproject.toml に追加済み）
+
+## 11. Amazon セッション定期リフレッシュ
+
+### 概要
+
+Amazon Seller Central の Cookie は比較的短時間（約5時間）で失効する。
+定期的にダッシュボードにアクセスしてセッションを維持するリフレッシュ機能を提供する。
+
+### 実装
+
+- **スクリプト**: `src/session_refresh.py`
+- **対象**: Amazon Seller Central ダッシュボード (`https://sellercentral.amazon.co.jp/home`)
+- **stealth 適用**: リフレッシュ時も `playwright-stealth` + `--disable-blink-features` を適用
+- **セッション切れ検知**: URL に `signin` が含まれる場合は警告ログを出力
+
+### 実行モード
+
+| モード | コマンド | 用途 |
+|--------|---------|------|
+| 単発実行 | `uv run python -m src.session_refresh` | タスクスケジューラ向け |
+| 常駐実行 | `uv run python -m src.session_refresh --interval 30` | バックグラウンド常駐 |
+
+### タスクスケジューラ設定
+
+- **タスク名**: `AmazonSessionRefresh`
+- **実行間隔**: 2時間ごと
+- **ログ出力**: `logs/session_refresh.log`
+
+## 12. ネクストエンジン Cookie 同意バナー対応
+
+### 概要
+
+ネクストエンジンのログイン画面に Cookie 利用同意バナー（`#cm-ov` オーバーレイ）が
+表示され、ログインボタンのクリックを妨害する場合がある。
+
+### 対処
+
+1. 同意ボタン（`#cm-acceptAll` または「同意します」テキスト）が表示されていればクリック
+2. ボタンが見つからない場合は `#cm-ov`, `#cc--main` 要素を JavaScript で除去
+3. `_dismiss_cookie_banner()` メソッドとしてログイン処理の冒頭で実行
+
+## 13. スケジューリング（タスクスケジューラ）
+
+### 登録タスク一覧
+
+| タスク名 | スケジュール | コマンド | 備考 |
+|----------|-------------|---------|------|
+| `DailySalesDownload` | 毎朝 6:00 | `uv run python -m src.main` | 前日分・全サイト |
+| `AmazonSessionRefresh` | 2時間ごと | `uv run python -m src.session_refresh` | Amazon セッション維持 |
+
+### DailySalesDownload リトライ設定
+
+| 項目 | 設定値 |
+|------|--------|
+| 失敗時リトライ間隔 | 1時間 |
+| 最大リトライ回数 | 3回 |
+| 実行タイムアウト | 30分/回 |
+| バッテリー駆動中 | 実行する |
+| スリープ復帰後 | 実行漏れを自動補完 |
+
+**リトライフロー**:
+```
+6:00  1回目 → 失敗 → 7:00 リトライ → 失敗 → 8:00 リトライ → 失敗 → 9:00 最終リトライ
+```
+
+9:00 までに最大4回の実行チャンスがあり、サイトメンテナンス等の一時的障害をカバーする。
+
+## 14. 非機能要件
 
 | 項目 | 内容 |
 |------|------|
-| 実行タイミング | 毎日深夜（Windows タスクスケジューラ） |
-| リトライ | 楽天認証エラー: 最大3回リトライ |
+| 実行タイミング | 毎朝 6:00（Windows タスクスケジューラ）、失敗時1時間ごとにリトライ（最大3回） |
+| リトライ | 楽天認証エラー: 最大3回リトライ / タスクスケジューラ: 失敗時1時間ごと最大3回 |
 | ログ | 日次ログファイル + コンソール出力 |
 | 通知 | 不要（ログのみ） |
 | リカバリー | `--date` / `--date-from` `--date-to` / `--site` 指定での再ダウンロード |
-| セキュリティ | ID・PW は xlsx ファイルから読み取り。git 管理外 |
-| 環境 | Windows 11, Python 3.13+ + Playwright, uv |
-| Cookie管理 | 全サイトで Cookie/storage_state 保存・復元 |
+| セキュリティ | ID・PW は xlsx ファイルから読み取り。git 管理外。playwright-stealth で自動化検出回避 |
+| 環境 | Windows 11, Python 3.13+ + Playwright + playwright-stealth, uv |
+| Cookie管理 | 全サイトで Cookie/storage_state 保存・復元。Amazon は2時間ごとにセッションリフレッシュ |
 
-## 12. 確認事項
+## 15. 確認事項
 
 | # | 項目 | 状態 |
 |---|------|------|
@@ -279,3 +364,7 @@ NE:    ログイン(1回) → DL(3/9) → DL(3/10) → DL(3/11) → Cookie保存
 | Q14 | Cookie対応ログイン（全サイト） | **解決済** — セクション6参照 |
 | Q15 | 複数日付のリカバリーダウンロード | **解決済** — セクション8参照 |
 | Q16 | データ0件時のハンドリング | **解決済** — セクション9参照 |
+| Q17 | 自動化検出回避（playwright-stealth） | **解決済** — セクション10参照 |
+| Q18 | Amazon セッション定期リフレッシュ | **解決済** — セクション11参照 |
+| Q19 | NE Cookie 同意バナー対応 | **解決済** — セクション12参照 |
+| Q20 | タスクスケジューラ設定（日次DL + リトライ） | **解決済** — セクション13参照 |

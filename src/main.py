@@ -10,6 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
 
 # .env を読み込み（プロジェクトルートから）
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -57,6 +58,8 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
         d.isoformat(): {} for d in config.target_dates
     }
 
+    stealth = Stealth()
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=config.headless)
 
@@ -83,6 +86,7 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
                     headless=config.headless,
                     accept_downloads=True,
                     locale="ja-JP",
+                    args=["--disable-blink-features=AutomationControlled"],
                 )
             else:
                 cookie_file = config.cookie_dir / f"{site}.json"
@@ -92,6 +96,9 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
                     accept_downloads=True,
                     locale="ja-JP",
                 )
+
+            # Stealth 適用（自動化検出を回避）
+            await stealth.apply_stealth_async(context)
 
             # ログイン1回 → 全日付 DL
             downloader = downloader_cls(config, credentials, context)

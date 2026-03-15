@@ -26,6 +26,9 @@ class NextEngineDownloader(BaseDownloader):
         await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
         await self.page.wait_for_timeout(3000)
 
+        # Cookie 同意バナーが表示されている場合は閉じる
+        await self._dismiss_cookie_banner()
+
         # Cookie 復元でログイン済みならログイン処理をスキップ
         login_form = self.page.locator("#user_login_code")
         if await login_form.is_visible():
@@ -48,6 +51,24 @@ class NextEngineDownloader(BaseDownloader):
         await self.page.wait_for_load_state("domcontentloaded")
         await self.page.wait_for_timeout(5000)
         logger.info("%s: メイン機能へ遷移完了", self.site_name)
+
+    async def _dismiss_cookie_banner(self) -> None:
+        """Cookie 同意バナー（cm-ov オーバーレイ）を閉じる."""
+        try:
+            consent_btn = self.page.locator("#cm-acceptAll, button:has-text('同意します')")
+            if await consent_btn.is_visible(timeout=3000):
+                await consent_btn.click()
+                await self.page.wait_for_timeout(1000)
+                logger.info("%s: Cookie 同意バナーを閉じました", self.site_name)
+            else:
+                # バナーの overlay が残っている場合は JS で除去
+                removed = await self.page.evaluate(
+                    'document.querySelectorAll("#cm-ov, #cc--main").forEach(e => e.remove())'
+                )
+                logger.debug("%s: Cookie バナー要素を除去", self.site_name)
+        except Exception:
+            # バナーが表示されなかった場合は無視
+            pass
 
     async def _handle_news_page(self) -> None:
         """不定期に表示されるお知らせページを処理する."""
