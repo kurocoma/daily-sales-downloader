@@ -70,17 +70,47 @@ class ShopifyDownloader(BaseDownloader):
         except Exception:
             pass  # セキュリティ確認が出なければスキップ
 
-        # admin 画面に到達するまで待機（最大60秒）
-        for _ in range(12):
+        # admin 画面に到達するまで待機（最大30秒）
+        for _ in range(6):
             if "admin.shopify.com" in self.page.url:
                 break
+            # アカウント選択画面が表示される場合 → アカウントをクリック
+            if "/select" in self.page.url:
+                await self._select_account()
             await self.page.wait_for_timeout(5000)
         else:
-            raise RuntimeError(
-                f"Shopify: admin 画面に到達できませんでした。現在の URL: {self.page.url}"
+            # アカウント設定ページ等に遷移した場合 → admin に直接移動
+            logger.info(
+                "%s: admin 未到達（%s）→ 注文管理ページへ直接遷移",
+                self.site_name, self.page.url,
             )
+            await self.page.goto(ORDERS_URL, wait_until="domcontentloaded")
+            await self.page.wait_for_timeout(5000)
+            # アカウント選択画面にリダイレクトされた場合
+            if "/select" in self.page.url:
+                await self._select_account()
+                await self.page.wait_for_timeout(5000)
+            if "admin.shopify.com" not in self.page.url:
+                raise RuntimeError(
+                    f"Shopify: admin 画面に到達できませんでした。現在の URL: {self.page.url}"
+                )
 
         logger.info("%s: ログイン成功", self.site_name)
+
+    async def _select_account(self) -> None:
+        """アカウント選択画面で最初のアカウントをクリックする."""
+        try:
+            account_btn = self.page.locator(
+                'button:has-text("株式会社くりま"), '
+                'a:has-text("株式会社くりま"), '
+                'div[role="button"]:has-text("株式会社くりま")'
+            ).first
+            if await account_btn.is_visible():
+                await account_btn.click()
+                logger.info("%s: アカウント選択 — 株式会社くりま", self.site_name)
+                await self.page.wait_for_timeout(3000)
+        except Exception:
+            pass
 
     async def download(self) -> list[Path]:
         """注文データをエクスポートし、Fulfilled at でフィルタして保存."""
@@ -90,10 +120,10 @@ class ShopifyDownloader(BaseDownloader):
         await self.page.goto(ORDERS_URL, wait_until="domcontentloaded")
         await self.page.wait_for_timeout(5000)
 
-        # 「エクスポート」ボタンをクリック
+        # 「エクスポート」ボタンをクリック（ActionMenu 内のボタンを指定）
         export_btn = self.page.locator(
-            'button:has(span:text("エクスポート"))'
-        )
+            'div.Polaris-ActionMenu-SecondaryAction button:has(span:text("エクスポート"))'
+        ).first
         await export_btn.wait_for(state="visible", timeout=15000)
         await export_btn.click()
         logger.info("%s: エクスポートボタンクリック", self.site_name)
