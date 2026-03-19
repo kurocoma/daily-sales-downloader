@@ -25,6 +25,7 @@ _SITE_KEY_MAP: dict[str, str] = {
     "楽天(ダウンロード用)": "rakuten_csv",
     "Yahoo": "yahoo",
     "Amazon": "amazon",
+    "Shopify": "shopify",
     "ネクストエンジン": "next_engine",
 }
 
