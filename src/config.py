@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
-SITES = ("rakuten", "yahoo", "amazon", "next_engine")
+SITES = ("rakuten", "yahoo", "amazon", "shopify", "next_engine")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CREDENTIAL_PATH = BASE_DIR / "docs" / "ID・PW.xlsx"
@@ -71,7 +71,7 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         "--site",
         type=lambda s: s.split(","),
         default=None,
-        help="対象サイト (カンマ区切り: rakuten,yahoo,amazon,next_engine)",
+        help="対象サイト (カンマ区切り: rakuten,yahoo,amazon,shopify,next_engine)",
     )
     parser.add_argument(
         "--no-headless",
