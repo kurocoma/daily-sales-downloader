@@ -15,6 +15,7 @@ class DownloadTarget(Enum):
     YAHOO_ITEM = "yahoo_item"
     AMAZON_ALL_ORDER = "amazon_all_order"
     AMAZON_TRANSACTION = "amazon_transaction"
+    SHOPIFY = "shopify"
     NE_BUYER = "ne_buyer"
     NE_PRODUCT = "ne_product"
 
@@ -27,6 +28,7 @@ _PATH_MAP: dict[DownloadTarget, str] = {
     DownloadTarget.YAHOO_ITEM: r"yahoo\item\{month}月",
     DownloadTarget.AMAZON_ALL_ORDER: r"amazon\全注文レポート\{month}月",
     DownloadTarget.AMAZON_TRANSACTION: r"amazon\日別トランザクション\{month}月",
+    DownloadTarget.SHOPIFY: r"shopify\{month}月",
     DownloadTarget.NE_BUYER: r"ネクストエンジン\購入者データ",
     DownloadTarget.NE_PRODUCT: r"ネクストエンジン\商品情報データ",
 }
@@ -47,6 +49,8 @@ def _format_filename(target: DownloadTarget, target_date: date) -> str:
             return f"AllOrderReport_{ds}.txt"
         case DownloadTarget.AMAZON_TRANSACTION:
             return f"{ds}_{ds}の期間の取引.csv"
+        case DownloadTarget.SHOPIFY:
+            return f"{ds}.csv"
         case DownloadTarget.NE_BUYER | DownloadTarget.NE_PRODUCT:
             return f"{ds}.csv"
 
