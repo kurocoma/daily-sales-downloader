@@ -18,6 +18,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from src.config import AppConfig, parse_args
 from src.credential import load_credentials
 from src.downloader.base import DownloadResult
+from src.excel_refresh import refresh_and_filter, get_excel_path
 from src.utils.logger import setup_logger
 
 logger = logging.getLogger("daily_sales")
@@ -31,11 +32,13 @@ def _register_downloaders() -> None:
     from src.downloader.rakuten import RakutenDownloader
     from src.downloader.yahoo import YahooDownloader
     from src.downloader.amazon import AmazonDownloader
+    from src.downloader.shopify import ShopifyDownloader
     from src.downloader.next_engine import NextEngineDownloader
 
     _DOWNLOADER_MAP["rakuten"] = RakutenDownloader
     _DOWNLOADER_MAP["yahoo"] = YahooDownloader
     _DOWNLOADER_MAP["amazon"] = AmazonDownloader
+    _DOWNLOADER_MAP["shopify"] = ShopifyDownloader
     _DOWNLOADER_MAP["next_engine"] = NextEngineDownloader
 
 
@@ -172,6 +175,16 @@ def cli(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     logger.info("全サイト・全日付 正常完了")
+
+    # Excel 集計ファイルのデータ更新 & 前日日付フィルタ
+    target = config.target_dates[-1]
+    excel_path = get_excel_path(target)
+    try:
+        logger.info("Excel 集計ファイル更新開始: %s", excel_path)
+        refresh_and_filter(excel_path, target)
+        logger.info("Excel 集計ファイル更新完了")
+    except Exception:
+        logger.exception("Excel 集計ファイル更新に失敗しました（DL自体は成功）")
 
 
 if __name__ == "__main__":
