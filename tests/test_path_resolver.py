@@ -46,6 +46,18 @@ def test_ne_product():
     assert p == BASE / "2026" / "ネクストエンジン" / "商品情報データ" / "20260311.csv"
 
 
+def test_ne_buyer_order_date():
+    p = resolve_download_path(BASE, DownloadTarget.NE_BUYER_ORDER_DATE, DATE)
+    assert "注文日ベース" in str(p)
+    assert "購入者データ" in str(p)
+
+
+def test_ne_product_order_date():
+    p = resolve_download_path(BASE, DownloadTarget.NE_PRODUCT_ORDER_DATE, DATE)
+    assert "注文日ベース" in str(p)
+    assert "商品情報データ" in str(p)
+
+
 def test_year_month_change():
     """年末 → 翌年1月のパス."""
     d = date(2026, 12, 31)

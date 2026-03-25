@@ -44,6 +44,12 @@ class NextEngineDownloader(BaseDownloader):
         else:
             logger.info("%s: ログイン済み（Cookie 復元）— スキップ", self.site_name)
 
+        # モーダル backdrop が残っている場合は除去
+        await self.page.evaluate(
+            'document.querySelectorAll(".modal-backdrop").forEach(e => e.remove())'
+        )
+        await self.page.wait_for_timeout(1000)
+
         # 「メイン機能」アプリをクリックして main ドメインへ遷移
         main_app = self.page.get_by_role("link", name="メイン機能")
         await main_app.wait_for(state="visible", timeout=15000)
@@ -70,6 +76,19 @@ class NextEngineDownloader(BaseDownloader):
             # バナーが表示されなかった場合は無視
             pass
 
+    async def _set_page_size(self) -> None:
+        """表示件数を1000件に設定する."""
+        try:
+            page_sel = self.page.locator("#page_sel")
+            if await page_sel.is_visible(timeout=3000):
+                current = await page_sel.input_value()
+                if current != "1000":
+                    await page_sel.select_option(value="1000")
+                    await self.page.wait_for_timeout(3000)
+                    logger.info("%s: 表示件数を1000件に変更", self.site_name)
+        except Exception:
+            logger.debug("%s: 表示件数セレクタが見つかりません", self.site_name)
+
     async def _handle_news_page(self) -> None:
         """不定期に表示されるお知らせページを処理する."""
         try:
@@ -89,7 +108,11 @@ class NextEngineDownloader(BaseDownloader):
         files: list[Path] = []
 
         # 購入者データ
-        buyer_file = await self._search_and_download(DownloadTarget.NE_BUYER)
+        if self.config.date_mode == "order":
+            buyer_target = DownloadTarget.NE_BUYER_ORDER_DATE
+        else:
+            buyer_target = DownloadTarget.NE_BUYER
+        buyer_file = await self._search_and_download(buyer_target)
         if buyer_file is not None:
             files.append(buyer_file)
 
@@ -110,6 +133,9 @@ class NextEngineDownloader(BaseDownloader):
         await self.page.wait_for_timeout(5000)
         logger.info("%s: 受注一覧へ遷移完了", self.site_name)
 
+        # 表示件数を最大（1000件）に設定
+        await self._set_page_size()
+
         # 「詳細検索」クリック
         await self.page.click("#jyuchu_dlg_open")
         await self.page.wait_for_timeout(2000)
@@ -124,9 +150,16 @@ class NextEngineDownloader(BaseDownloader):
             'select[name="sea_jyuchu_search_field49"]', value="0"
         )
 
-        # 出荷確定日 — 開始・終了に日付入力
-        await self.page.fill("#sea_jyuchu_search_field36_from", date_str)
-        await self.page.fill("#sea_jyuchu_search_field36_to", date_str)
+        # 日付フィールド — date_mode に応じて出荷確定日 or 受注日
+        if self.config.date_mode == "order":
+            field_from = "#sea_jyuchu_search_field03_from"
+            field_to = "#sea_jyuchu_search_field03_to"
+        else:
+            field_from = "#sea_jyuchu_search_field36_from"
+            field_to = "#sea_jyuchu_search_field36_to"
+
+        await self.page.fill(field_from, date_str)
+        await self.page.fill(field_to, date_str)
 
         # 検索ボタン押下（ダイアログ内）
         await self.page.click("#ne_dlg_btn3_searchJyuchuDlg")
@@ -168,6 +201,9 @@ class NextEngineDownloader(BaseDownloader):
         await self.page.goto(ORDER_URL, wait_until="domcontentloaded")
         await self.page.wait_for_timeout(3000)
 
+        # 表示件数を最大（1000件）に設定
+        await self._set_page_size()
+
         # 詳細検索 → 同じ条件で検索
         await self.page.click("#jyuchu_dlg_open")
         await self.page.wait_for_timeout(2000)
@@ -176,8 +212,16 @@ class NextEngineDownloader(BaseDownloader):
         await self.page.select_option(
             'select[name="sea_jyuchu_search_field49"]', value="0"
         )
-        await self.page.fill("#sea_jyuchu_search_field36_from", date_str)
-        await self.page.fill("#sea_jyuchu_search_field36_to", date_str)
+        # 日付フィールド — date_mode に応じて出荷確定日 or 受注日
+        if self.config.date_mode == "order":
+            field_from = "#sea_jyuchu_search_field03_from"
+            field_to = "#sea_jyuchu_search_field03_to"
+        else:
+            field_from = "#sea_jyuchu_search_field36_from"
+            field_to = "#sea_jyuchu_search_field36_to"
+
+        await self.page.fill(field_from, date_str)
+        await self.page.fill(field_to, date_str)
 
         await self.page.click("#ne_dlg_btn3_searchJyuchuDlg")
 
@@ -225,7 +269,11 @@ class NextEngineDownloader(BaseDownloader):
 
         await new_page.close()
 
+        if self.config.date_mode == "order":
+            product_target = DownloadTarget.NE_PRODUCT_ORDER_DATE
+        else:
+            product_target = DownloadTarget.NE_PRODUCT
         dest = resolve_download_path(
-            self.config.download_base, DownloadTarget.NE_PRODUCT, target_date
+            self.config.download_base, product_target, target_date
         )
         return await self.save_downloaded_file(tmp_path, dest)

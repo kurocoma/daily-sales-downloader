@@ -18,6 +18,8 @@ class DownloadTarget(Enum):
     SHOPIFY = "shopify"
     NE_BUYER = "ne_buyer"
     NE_PRODUCT = "ne_product"
+    NE_BUYER_ORDER_DATE = "ne_buyer_order_date"
+    NE_PRODUCT_ORDER_DATE = "ne_product_order_date"
 
 
 # ベースパスからの相対パス定義
@@ -31,6 +33,8 @@ _PATH_MAP: dict[DownloadTarget, str] = {
     DownloadTarget.SHOPIFY: r"shopify\{month}月",
     DownloadTarget.NE_BUYER: r"ネクストエンジン\購入者データ",
     DownloadTarget.NE_PRODUCT: r"ネクストエンジン\商品情報データ",
+    DownloadTarget.NE_BUYER_ORDER_DATE: r"ネクストエンジン\注文日ベース\購入者データ",
+    DownloadTarget.NE_PRODUCT_ORDER_DATE: r"ネクストエンジン\注文日ベース\商品情報データ",
 }
 
 
@@ -51,7 +55,12 @@ def _format_filename(target: DownloadTarget, target_date: date) -> str:
             return f"{ds}_{ds}の期間の取引.csv"
         case DownloadTarget.SHOPIFY:
             return f"{ds}.csv"
-        case DownloadTarget.NE_BUYER | DownloadTarget.NE_PRODUCT:
+        case (
+            DownloadTarget.NE_BUYER
+            | DownloadTarget.NE_PRODUCT
+            | DownloadTarget.NE_BUYER_ORDER_DATE
+            | DownloadTarget.NE_PRODUCT_ORDER_DATE
+        ):
             return f"{ds}.csv"
 
 

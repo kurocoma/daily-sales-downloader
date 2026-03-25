@@ -17,7 +17,7 @@ def test_custom_date():
 
 def test_default_sites():
     config = parse_args([])
-    assert config.target_sites == ["rakuten", "yahoo", "amazon", "next_engine"]
+    assert config.target_sites == ["rakuten", "yahoo", "amazon", "shopify", "next_engine"]
 
 
 def test_custom_sites():
@@ -39,3 +39,13 @@ def test_download_base_contains_username():
     config = parse_args([])
     assert config.username in str(config.download_base)
     assert "日別売上集計" in str(config.download_base)
+
+
+def test_date_mode_default():
+    config = parse_args([])
+    assert config.date_mode == "shipment"
+
+
+def test_date_mode_order():
+    config = parse_args(["--date-mode", "order"])
+    assert config.date_mode == "order"

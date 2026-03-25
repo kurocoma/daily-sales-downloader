@@ -29,6 +29,7 @@ class AppConfig:
     max_retries: int = 3
     retry_delay: float = 5.0
     headless: bool = True
+    date_mode: str = "shipment"
     credential_path: Path = CREDENTIAL_PATH
     cookie_dir: Path = COOKIE_DIR
     log_dir: Path = LOG_DIR
@@ -84,6 +85,12 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         default=3,
         help="リトライ回数 (デフォルト: 3)",
     )
+    parser.add_argument(
+        "--date-mode",
+        choices=["shipment", "order"],
+        default="shipment",
+        help="Date field to search: shipment (出荷確定日) or order (受注日)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -122,4 +129,5 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         target_sites=sites,
         max_retries=args.retries,
         headless=not args.no_headless,
+        date_mode=args.date_mode,
     )
