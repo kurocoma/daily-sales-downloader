@@ -132,31 +132,106 @@ class NextEngineDownloader(BaseDownloader):
         return files
 
     async def download_range(self) -> list[Path]:
-        """日付レンジ指定で購入者データ・商品情報データをまとめてDL."""
-        files: list[Path] = []
+        """日付レンジを7日チャンクに分割してDL→CSV結合.
+
+        NE のダウンロード上限は表示件数(1000件)に制限されるため、
+        7日ごとに分割して安全にダウンロードし、最後に1ファイルに結合する。
+        """
+        from datetime import timedelta
+        import csv
+        import io
 
         date_from = self.config.date_range_from
         date_to = self.config.date_range_to
-        date_from_str = date_from.strftime("%Y/%m/%d")
-        date_to_str = date_to.strftime("%Y/%m/%d")
         logger.info(
-            "%s: レンジダウンロード %s ~ %s (%d日間)",
-            self.site_name, date_from_str, date_to_str, self.config.range_days,
+            "%s: レンジダウンロード %s ~ %s (%d日間, 7日チャンク)",
+            self.site_name,
+            date_from.strftime("%Y/%m/%d"),
+            date_to.strftime("%Y/%m/%d"),
+            self.config.range_days,
         )
 
-        # 購入者データ（レンジ）
-        buyer_file = await self._search_and_download_range(
-            DownloadTarget.NE_BUYER_RANGE, date_from, date_to,
-        )
-        if buyer_file is not None:
-            files.append(buyer_file)
+        # 7日チャンクに分割
+        chunks: list[tuple] = []
+        chunk_start = date_from
+        while chunk_start <= date_to:
+            chunk_end = min(chunk_start + timedelta(days=6), date_to)
+            chunks.append((chunk_start, chunk_end))
+            chunk_start = chunk_end + timedelta(days=1)
 
-        # 商品情報データ（レンジ・明細一覧経由）
-        product_file = await self._search_and_download_product_range(
-            date_from, date_to,
-        )
-        if product_file is not None:
-            files.append(product_file)
+        logger.info("%s: %d チャンクに分割", self.site_name, len(chunks))
+
+        # 購入者データ: チャンクごとにDL→結合
+        buyer_rows: list[str] = []
+        buyer_header: str | None = None
+        for i, (c_from, c_to) in enumerate(chunks):
+            logger.info(
+                "%s: [buyer %d/%d] %s ~ %s",
+                self.site_name, i + 1, len(chunks),
+                c_from.strftime("%Y/%m/%d"), c_to.strftime("%Y/%m/%d"),
+            )
+            tmp = await self._search_and_download_range(
+                DownloadTarget.NE_BUYER_RANGE, c_from, c_to,
+            )
+            if tmp is not None:
+                with open(tmp, "r", encoding="cp932") as f:
+                    lines = f.readlines()
+                if lines:
+                    if buyer_header is None:
+                        buyer_header = lines[0]
+                    buyer_rows.extend(lines[1:])  # skip header
+                # 一時ファイル削除
+                tmp.unlink(missing_ok=True)
+
+        # 商品情報データ: チャンクごとにDL→結合
+        product_rows: list[str] = []
+        product_header: str | None = None
+        for i, (c_from, c_to) in enumerate(chunks):
+            logger.info(
+                "%s: [product %d/%d] %s ~ %s",
+                self.site_name, i + 1, len(chunks),
+                c_from.strftime("%Y/%m/%d"), c_to.strftime("%Y/%m/%d"),
+            )
+            tmp = await self._search_and_download_product_range(c_from, c_to)
+            if tmp is not None:
+                with open(tmp, "r", encoding="cp932") as f:
+                    lines = f.readlines()
+                if lines:
+                    if product_header is None:
+                        product_header = lines[0]
+                    product_rows.extend(lines[1:])  # skip header
+                tmp.unlink(missing_ok=True)
+
+        # 結合ファイル書き出し
+        files: list[Path] = []
+
+        if buyer_header and buyer_rows:
+            dest = resolve_range_download_path(
+                self.config.download_base,
+                DownloadTarget.NE_BUYER_RANGE,
+                date_from,
+                date_to,
+            )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "w", encoding="cp932", newline="") as f:
+                f.write(buyer_header)
+                f.writelines(buyer_rows)
+            logger.info("%s: 購入者データ結合 → %s (%d行)", self.site_name, dest, len(buyer_rows))
+            files.append(dest)
+
+        if product_header and product_rows:
+            dest = resolve_range_download_path(
+                self.config.download_base,
+                DownloadTarget.NE_PRODUCT_RANGE,
+                date_from,
+                date_to,
+            )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "w", encoding="cp932", newline="") as f:
+                f.write(product_header)
+                f.writelines(product_rows)
+            logger.info("%s: 商品情報データ結合 → %s (%d行)", self.site_name, dest, len(product_rows))
+            files.append(dest)
 
         return files
 
@@ -376,16 +451,12 @@ class NextEngineDownloader(BaseDownloader):
         )
         await self.page.wait_for_timeout(2000)
 
-        # ダウンロード（NE は検索条件に一致する全件をエクスポート）
+        # ダウンロード → 一時パスをそのまま返す（結合はdownload_range()が行う）
         tmp_path = await self.wait_and_download_file(
             lambda: self.page.click("#searchJyuchu_table_dl_lnk"),
             timeout=120000,
         )
-
-        dest = resolve_range_download_path(
-            self.config.download_base, target, date_from, date_to,
-        )
-        return await self.save_downloaded_file(tmp_path, dest)
+        return tmp_path
 
     async def _search_and_download_product_range(
         self,
@@ -465,10 +536,5 @@ class NextEngineDownloader(BaseDownloader):
 
         await new_page.close()
 
-        dest = resolve_range_download_path(
-            self.config.download_base,
-            DownloadTarget.NE_PRODUCT_RANGE,
-            date_from,
-            date_to,
-        )
-        return await self.save_downloaded_file(tmp_path, dest)
+        # 一時パスをそのまま返す（結合はdownload_range()が行う）
+        return tmp_path
