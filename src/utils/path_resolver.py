@@ -20,6 +20,8 @@ class DownloadTarget(Enum):
     NE_PRODUCT = "ne_product"
     NE_BUYER_ORDER_DATE = "ne_buyer_order_date"
     NE_PRODUCT_ORDER_DATE = "ne_product_order_date"
+    NE_BUYER_RANGE = "ne_buyer_range"
+    NE_PRODUCT_RANGE = "ne_product_range"
 
 
 # ベースパスからの相対パス定義
@@ -35,6 +37,8 @@ _PATH_MAP: dict[DownloadTarget, str] = {
     DownloadTarget.NE_PRODUCT: r"ネクストエンジン\商品情報データ",
     DownloadTarget.NE_BUYER_ORDER_DATE: r"ネクストエンジン\注文日ベース\購入者データ",
     DownloadTarget.NE_PRODUCT_ORDER_DATE: r"ネクストエンジン\注文日ベース\商品情報データ",
+    DownloadTarget.NE_BUYER_RANGE: r"ネクストエンジン\受注日レンジ",
+    DownloadTarget.NE_PRODUCT_RANGE: r"ネクストエンジン\受注日レンジ",
 }
 
 
@@ -62,6 +66,10 @@ def _format_filename(target: DownloadTarget, target_date: date) -> str:
             | DownloadTarget.NE_PRODUCT_ORDER_DATE
         ):
             return f"{ds}.csv"
+        case DownloadTarget.NE_BUYER_RANGE | DownloadTarget.NE_PRODUCT_RANGE:
+            # Range targets require date_range_from; this fallback should
+            # not be reached when using resolve_range_download_path().
+            return f"{ds}.csv"
 
 
 def resolve_download_path(
@@ -84,6 +92,38 @@ def resolve_download_path(
 
     sub_path = _PATH_MAP[target].format(month=month)
     filename = _format_filename(target, target_date)
+
+    return base / year / sub_path / filename
+
+
+def resolve_range_download_path(
+    base: Path,
+    target: DownloadTarget,
+    date_from: date,
+    date_to: date,
+) -> Path:
+    """レンジダウンロード用の保存先フルパスを返す.
+
+    Args:
+        base: ダウンロード保存先ベースパス（年ディレクトリの親）
+        target: ダウンロード対象 (NE_BUYER_RANGE / NE_PRODUCT_RANGE)
+        date_from: 範囲開始日
+        date_to: 範囲終了日
+
+    Returns:
+        保存先のフルパス（ディレクトリ + ファイル名）
+    """
+    year = str(date_to.year)
+    sub_path = _PATH_MAP[target]
+    ds_from = date_from.strftime("%Y%m%d")
+    ds_to = date_to.strftime("%Y%m%d")
+
+    if target == DownloadTarget.NE_BUYER_RANGE:
+        filename = f"buyer_{ds_from}_{ds_to}.csv"
+    elif target == DownloadTarget.NE_PRODUCT_RANGE:
+        filename = f"product_{ds_from}_{ds_to}.csv"
+    else:
+        raise ValueError(f"resolve_range_download_path does not support target: {target}")
 
     return base / year / sub_path / filename
 

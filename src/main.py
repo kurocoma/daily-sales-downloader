@@ -81,12 +81,15 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
                 continue
 
             # コンテキスト作成
-            if site == "amazon":
-                user_data_dir = config.cookie_dir / "amazon_profile"
+            # Amazon / Shopify: persistent_context
+            if site in ("amazon", "shopify"):
+                user_data_dir = config.cookie_dir / f"{site}_profile"
                 user_data_dir.mkdir(parents=True, exist_ok=True)
+                # Shopify: Cloudflare Turnstile がヘッドレスを検出するため常に非ヘッドレス
+                site_headless = False if site == "shopify" else config.headless
                 context = await pw.chromium.launch_persistent_context(
                     user_data_dir=str(user_data_dir),
-                    headless=config.headless,
+                    headless=site_headless,
                     accept_downloads=True,
                     locale="ja-JP",
                     args=["--disable-blink-features=AutomationControlled"],
@@ -103,9 +106,20 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
             # Stealth 適用（自動化検出を回避）
             await stealth.apply_stealth_async(context)
 
-            # ログイン1回 → 全日付 DL
+            # ログイン1回 → 全日付 DL（レンジモードは1回で全期間カバー）
             downloader = downloader_cls(config, credentials, context)
-            site_results = await downloader.run_multi_dates(config.target_dates)
+            if config.range_days > 0 and site == "next_engine":
+                # レンジモード: download() 内で range 処理するため run() を1回呼ぶ
+                result = await downloader.run()
+                # run() は単一 DownloadResult を返す → date_key は today
+                from datetime import date as date_cls
+                date_key = date_cls.today().isoformat()
+                site_results = {date_key: result}
+                # all_results に date_key が無い場合は追加
+                if date_key not in all_results:
+                    all_results[date_key] = {}
+            else:
+                site_results = await downloader.run_multi_dates(config.target_dates)
 
             # 結果を date → site 構造にマッピング
             for date_key, result in site_results.items():
@@ -113,7 +127,7 @@ async def async_main(config: AppConfig) -> dict[str, dict[str, DownloadResult]]:
 
             # Cookie 保存（1件でも成功していれば）
             any_ok = any(r.success for r in site_results.values())
-            if any_ok and site != "amazon":
+            if any_ok and site not in ("amazon", "shopify"):
                 config.cookie_dir.mkdir(parents=True, exist_ok=True)
                 await context.storage_state(path=str(cookie_file))
                 logger.info("%s: Cookie 保存完了", site)
@@ -176,6 +190,11 @@ def cli(argv: list[str] | None = None) -> None:
 
     logger.info("全サイト・全日付 正常完了")
 
+    # レンジモードの場合は Excel/差異レポート更新をスキップ
+    if config.range_days > 0:
+        logger.info("レンジモードのため Excel/差異レポート更新をスキップ")
+        return
+
     # Excel 集計ファイルのデータ更新 & 前日日付フィルタ
     target = config.target_dates[-1]
     excel_path = get_excel_path(target)
@@ -185,6 +204,50 @@ def cli(argv: list[str] | None = None) -> None:
         logger.info("Excel 集計ファイル更新完了")
     except Exception:
         logger.exception("Excel 集計ファイル更新に失敗しました（DL自体は成功）")
+
+    # 差異レポート生成（対象月分）
+    try:
+        _generate_reconciliation_report(target, config)
+    except Exception:
+        logger.exception("差異レポート生成に失敗しました（DL・Excel更新には影響なし）")
+
+
+def _generate_reconciliation_report(target: date, config: AppConfig) -> None:
+    """対象月の差異レポートを生成する."""
+    from src.aggregator.reconcile import reconcile_all
+    from src.aggregator.reconcile_excel import write_reconciliation_report
+
+    year, month = target.year, target.month
+    dl_base = config.download_base / str(year)
+    master = config.download_base.parent / "商品管理シート.xlsm"
+    tel = dl_base / "その他電話注文" / "その他電話注文.xlsm"
+    output = config.log_dir / f"差異レポート_{year}年{month}月.xlsx"
+
+    if not master.exists():
+        logger.warning("商品管理シートが見つかりません: %s — 差異レポートをスキップ", master)
+        return
+    if not tel.exists():
+        logger.warning("その他電話注文.xlsm が見つかりません: %s — 差異レポートをスキップ", tel)
+        return
+
+    logger.info("差異レポート生成開始: %d年%d月", year, month)
+    results = reconcile_all(dl_base, master, tel, year, month)
+
+    # サマリーをログ出力
+    summary = results.get("サマリー")
+    if summary is not None and not summary.empty:
+        for site_name, grp in summary.groupby("サイト"):
+            match_count = int(grp["一致件数"].sum())
+            total_mm = int(grp["総合計不一致件数"].sum())
+            product_mm = int(grp["商品計不一致件数"].sum())
+            mall_only = int(grp["モール側のみ件数"].sum())
+            logger.info(
+                "差異レポート [%s]: 一致=%d, 総合計不一致=%d, 商品計不一致=%d, モール側のみ=%d",
+                site_name, match_count, total_mm, product_mm, mall_only,
+            )
+
+    write_reconciliation_report(results, output, year, month)
+    logger.info("差異レポート生成完了: %s", output)
 
 
 if __name__ == "__main__":

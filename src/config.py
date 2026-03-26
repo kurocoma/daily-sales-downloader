@@ -30,6 +30,7 @@ class AppConfig:
     retry_delay: float = 5.0
     headless: bool = True
     date_mode: str = "shipment"
+    range_days: int = 0
     credential_path: Path = CREDENTIAL_PATH
     cookie_dir: Path = COOKIE_DIR
     log_dir: Path = LOG_DIR
@@ -43,6 +44,16 @@ class AppConfig:
     def download_base(self) -> Path:
         """ダウンロード保存先のベースパス."""
         return Path(DOWNLOAD_BASE_TEMPLATE.format(username=self.username))
+
+    @property
+    def date_range_from(self) -> date:
+        """レンジダウンロードの開始日（today - range_days）."""
+        return date.today() - timedelta(days=self.range_days)
+
+    @property
+    def date_range_to(self) -> date:
+        """レンジダウンロードの終了日（today）."""
+        return date.today()
 
 
 def parse_args(argv: list[str] | None = None) -> AppConfig:
@@ -91,6 +102,12 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
         default="shipment",
         help="Date field to search: shipment (出荷確定日) or order (受注日)",
     )
+    parser.add_argument(
+        "--range-days",
+        type=int,
+        default=0,
+        help="Download N days range instead of single date (NE only, 0=disabled)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -123,11 +140,18 @@ def parse_args(argv: list[str] | None = None) -> AppConfig:
     if not username:
         parser.error("環境変数 USERNAME が設定されていません")
 
+    # range_days > 0 の場合、date_mode を "order" に強制
+    date_mode = args.date_mode
+    range_days = args.range_days
+    if range_days > 0:
+        date_mode = "order"
+
     return AppConfig(
         username=username,
         target_dates=target_dates,
         target_sites=sites,
         max_retries=args.retries,
         headless=not args.no_headless,
-        date_mode=args.date_mode,
+        date_mode=date_mode,
+        range_days=range_days,
     )

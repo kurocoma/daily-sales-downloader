@@ -6,7 +6,11 @@ import logging
 from pathlib import Path
 
 from src.downloader.base import BaseDownloader
-from src.utils.path_resolver import DownloadTarget, resolve_download_path
+from src.utils.path_resolver import (
+    DownloadTarget,
+    resolve_download_path,
+    resolve_range_download_path,
+)
 
 logger = logging.getLogger("daily_sales")
 
@@ -105,6 +109,10 @@ class NextEngineDownloader(BaseDownloader):
 
     async def download(self) -> list[Path]:
         """受注検索 → 購入者データ DL → 商品情報データ DL."""
+        # レンジモードの場合は download_range() に委譲
+        if self.config.range_days > 0:
+            return await self.download_range()
+
         files: list[Path] = []
 
         # 購入者データ
@@ -118,6 +126,35 @@ class NextEngineDownloader(BaseDownloader):
 
         # 商品情報データ（明細一覧経由）
         product_file = await self._search_and_download_product()
+        if product_file is not None:
+            files.append(product_file)
+
+        return files
+
+    async def download_range(self) -> list[Path]:
+        """日付レンジ指定で購入者データ・商品情報データをまとめてDL."""
+        files: list[Path] = []
+
+        date_from = self.config.date_range_from
+        date_to = self.config.date_range_to
+        date_from_str = date_from.strftime("%Y/%m/%d")
+        date_to_str = date_to.strftime("%Y/%m/%d")
+        logger.info(
+            "%s: レンジダウンロード %s ~ %s (%d日間)",
+            self.site_name, date_from_str, date_to_str, self.config.range_days,
+        )
+
+        # 購入者データ（レンジ）
+        buyer_file = await self._search_and_download_range(
+            DownloadTarget.NE_BUYER_RANGE, date_from, date_to,
+        )
+        if buyer_file is not None:
+            files.append(buyer_file)
+
+        # 商品情報データ（レンジ・明細一覧経由）
+        product_file = await self._search_and_download_product_range(
+            date_from, date_to,
+        )
         if product_file is not None:
             files.append(product_file)
 
@@ -275,5 +312,163 @@ class NextEngineDownloader(BaseDownloader):
             product_target = DownloadTarget.NE_PRODUCT
         dest = resolve_download_path(
             self.config.download_base, product_target, target_date
+        )
+        return await self.save_downloaded_file(tmp_path, dest)
+
+    # ── レンジダウンロード用メソッド ──
+
+    async def _search_and_download_range(
+        self,
+        target: DownloadTarget,
+        date_from,
+        date_to,
+    ) -> Path | None:
+        """受注検索（日付レンジ）→ 条件設定 → 検索 → ダウンロード."""
+        date_from_str = date_from.strftime("%Y/%m/%d")
+        date_to_str = date_to.strftime("%Y/%m/%d")
+
+        # 受注一覧へ遷移
+        await self.page.goto(ORDER_URL, wait_until="domcontentloaded")
+        await self.page.wait_for_timeout(5000)
+        logger.info("%s: 受注一覧へ遷移完了（レンジ）", self.site_name)
+
+        # 表示件数を最大（1000件）に設定
+        await self._set_page_size()
+
+        # 「詳細検索」クリック
+        await self.page.click("#jyuchu_dlg_open")
+        await self.page.wait_for_timeout(2000)
+        logger.info("%s: 詳細検索ダイアログを開きました（レンジ）", self.site_name)
+
+        # 「クリア」押下
+        await self.page.click('input[onclick="searchJyuchu.clear()"]')
+        await self.page.wait_for_timeout(1000)
+
+        # 受注キャンセル区分 → 0: 有効な受注です。
+        await self.page.select_option(
+            'select[name="sea_jyuchu_search_field49"]', value="0"
+        )
+
+        # 日付フィールド — レンジモードは常に受注日（field03）
+        field_from = "#sea_jyuchu_search_field03_from"
+        field_to = "#sea_jyuchu_search_field03_to"
+
+        await self.page.fill(field_from, date_from_str)
+        await self.page.fill(field_to, date_to_str)
+
+        # 検索ボタン押下（ダイアログ内）
+        await self.page.click("#ne_dlg_btn3_searchJyuchuDlg")
+        logger.info("%s: 検索実行（レンジ %s ~ %s）", self.site_name, date_from_str, date_to_str)
+
+        # ダイアログ / backdrop 除去を待機
+        await self.page.wait_for_timeout(5000)
+        await self.page.evaluate('document.querySelectorAll(".modal-backdrop").forEach(e => e.remove())')
+
+        # データ0件チェック
+        no_data = self.page.locator('text=結果はありませんでした')
+        if await no_data.is_visible():
+            logger.info("%s: データ0件（レンジ） — スキップ", self.site_name)
+            return None
+
+        # テーブルが表示されるまで待機
+        await self.page.wait_for_selector(
+            "#searchJyuchu_table_dl_lnk", timeout=60000
+        )
+        await self.page.wait_for_timeout(2000)
+
+        # ダウンロード（NE は検索条件に一致する全件をエクスポート）
+        tmp_path = await self.wait_and_download_file(
+            lambda: self.page.click("#searchJyuchu_table_dl_lnk"),
+            timeout=120000,
+        )
+
+        dest = resolve_range_download_path(
+            self.config.download_base, target, date_from, date_to,
+        )
+        return await self.save_downloaded_file(tmp_path, dest)
+
+    async def _search_and_download_product_range(
+        self,
+        date_from,
+        date_to,
+    ) -> Path | None:
+        """明細一覧経由で商品情報データをレンジダウンロードする."""
+        date_from_str = date_from.strftime("%Y/%m/%d")
+        date_to_str = date_to.strftime("%Y/%m/%d")
+
+        # 受注一覧へ再度遷移
+        await self.page.goto(ORDER_URL, wait_until="domcontentloaded")
+        await self.page.wait_for_timeout(3000)
+
+        # 表示件数を最大（1000件）に設定
+        await self._set_page_size()
+
+        # 詳細検索 → 同じ条件で検索
+        await self.page.click("#jyuchu_dlg_open")
+        await self.page.wait_for_timeout(2000)
+        await self.page.click('input[onclick="searchJyuchu.clear()"]')
+        await self.page.wait_for_timeout(1000)
+        await self.page.select_option(
+            'select[name="sea_jyuchu_search_field49"]', value="0"
+        )
+
+        # 日付フィールド — レンジモードは常に受注日（field03）
+        field_from = "#sea_jyuchu_search_field03_from"
+        field_to = "#sea_jyuchu_search_field03_to"
+
+        await self.page.fill(field_from, date_from_str)
+        await self.page.fill(field_to, date_to_str)
+
+        await self.page.click("#ne_dlg_btn3_searchJyuchuDlg")
+
+        # ダイアログ / backdrop 除去を待機
+        await self.page.wait_for_timeout(5000)
+        await self.page.evaluate('document.querySelectorAll(".modal-backdrop").forEach(e => e.remove())')
+
+        # データ0件チェック
+        no_data = self.page.locator('text=結果はありませんでした')
+        if await no_data.is_visible():
+            logger.info("%s: データ0件（商品情報レンジ） — スキップ", self.site_name)
+            return None
+
+        # テーブル待機
+        await self.page.wait_for_selector(
+            "#searchJyuchu_table_dl_lnk", timeout=60000
+        )
+        await self.page.wait_for_timeout(2000)
+
+        # 「全て選択」クリック
+        await self.page.click("#all_check")
+        await self.page.wait_for_timeout(1000)
+
+        # 「明細一覧」クリック
+        await self.page.click('img[alt="明細一覧"]')
+        await self.page.wait_for_timeout(2000)
+
+        # モーダル — 「伝票明細単位で出力」選択
+        await self.page.click('span:has-text("伝票明細単位で出力")')
+        await self.page.wait_for_timeout(500)
+
+        # 「開く」ボタン押下 → 新タブが開く
+        async with self.context.expect_page() as new_page_info:
+            await self.page.click("#btn_meisai_exec")
+        new_page = await new_page_info.value
+        await new_page.wait_for_load_state("domcontentloaded")
+        await new_page.wait_for_timeout(3000)
+
+        # 新タブで「ダウンロード」クリック
+        tmp_path: Path
+        async with new_page.expect_download(timeout=120000) as dl_info:
+            await new_page.click("#searchJyuchu_table_dl_lnk")
+        download = await dl_info.value
+        tmp_path = Path(await download.path())
+
+        await new_page.close()
+
+        dest = resolve_range_download_path(
+            self.config.download_base,
+            DownloadTarget.NE_PRODUCT_RANGE,
+            date_from,
+            date_to,
         )
         return await self.save_downloaded_file(tmp_path, dest)
